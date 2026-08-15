@@ -18,14 +18,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          EXCLUDED_USERS: "alpnanegi01"
 
         run: |
           echo "===================================="
           echo "PR AUTO CLOSE"
           echo "Repository: $REPO"
+          echo "Excluded Users: $EXCLUDED_USERS"
           echo "===================================="
-
-          NOW=$(date -u +%s)
 
           echo "Getting open PRs..."
 
@@ -36,6 +36,17 @@ jobs:
             --json number,title,author,createdAt \
             > prs.json
 
+          PR_COUNT=$(jq 'length' prs.json)
+
+          if [ "$PR_COUNT" -eq 0 ]; then
+            echo ""
+            echo "No open PRs found."
+            echo "Nothing to process."
+            exit 0
+          fi
+
+          NOW=$(date -u +%s)
+
           echo ""
           echo "===== PR EXECUTION REPORT ====="
 
@@ -45,19 +56,27 @@ jobs:
             PR_AUTHOR=$(echo "$PR" | jq -r '.author.login')
             CREATED_AT=$(echo "$PR" | jq -r '.createdAt')
 
-            CREATED_SECONDS=$(date -d "$CREATED_AT" +%s)
-            AGE_SECONDS=$((NOW - CREATED_SECONDS))
-            AGE_MINUTES=$((AGE_SECONDS / 60))
-
             echo ""
             echo "PR Number : #$PR_NUMBER"
             echo "Repository: $REPO"
             echo "Author    : $PR_AUTHOR"
+
+            # Skip excluded users
+            if echo ",$EXCLUDED_USERS," | grep -q ",$PR_AUTHOR,"; then
+              echo "Action    : SKIPPED"
+              echo "Reason    : User is excluded from auto-close"
+              continue
+            fi
+
+            CREATED_SECONDS=$(date -d "$CREATED_AT" +%s)
+            AGE_SECONDS=$((NOW - CREATED_SECONDS))
+            AGE_MINUTES=$((AGE_SECONDS / 60))
+
             echo "Open For  : $AGE_MINUTES minute(s)"
 
             if [ "$AGE_SECONDS" -gt 300 ]; then
 
-              echo "Action: Closing PR #$PR_NUMBER"
+              echo "Action    : Closing PR #$PR_NUMBER"
 
               gh pr comment "$PR_NUMBER" \
                 --repo "$REPO" \
@@ -66,11 +85,11 @@ jobs:
               gh pr close "$PR_NUMBER" \
                 --repo "$REPO"
 
-              echo "Result: CLOSED"
+              echo "Result    : CLOSED"
 
             else
 
-              echo "Result: LEFT OPEN"
+              echo "Result    : LEFT OPEN"
 
             fi
 
