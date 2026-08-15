@@ -20,9 +20,14 @@ jobs:
           REPO: ${{ github.repository }}
 
         run: |
-          echo "Checking open PRs in $REPO..."
+          echo "===================================="
+          echo "PR AUTO CLOSE"
+          echo "Repository: $REPO"
+          echo "===================================="
 
           NOW=$(date -u +%s)
+
+          echo "Getting open PRs..."
 
           gh pr list \
             --repo "$REPO" \
@@ -42,21 +47,21 @@ jobs:
 
             CREATED_SECONDS=$(date -d "$CREATED_AT" +%s)
             AGE_SECONDS=$((NOW - CREATED_SECONDS))
-            AGE_HOURS=$((AGE_SECONDS / 3600))
+            AGE_MINUTES=$((AGE_SECONDS / 60))
 
             echo ""
             echo "PR Number : #$PR_NUMBER"
             echo "Repository: $REPO"
             echo "Author    : $PR_AUTHOR"
-            echo "Open For  : $AGE_HOURS hour(s)"
+            echo "Open For  : $AGE_MINUTES minute(s)"
 
-            if [ "$AGE_SECONDS" -gt 3600 ]; then
+            if [ "$AGE_SECONDS" -gt 300 ]; then
 
               echo "Action: Closing PR #$PR_NUMBER"
 
               gh pr comment "$PR_NUMBER" \
                 --repo "$REPO" \
-                --body "Closed automatically because the PR has been open for >1h with no activity."
+                --body "Closed automatically because the PR has been open for more than 5 minutes."
 
               gh pr close "$PR_NUMBER" \
                 --repo "$REPO"
@@ -70,3 +75,6 @@ jobs:
             fi
 
           done
+
+          echo ""
+          echo "===== PROCESS COMPLETED ====="
