@@ -27,14 +27,19 @@ jobs:
 
           echo "Getting open PRs..."
 
-          gh pr list \
+          if ! gh pr list \
             --repo "$REPO" \
             --state open \
             --limit 100 \
             --json number,title,author,createdAt,headRefName,baseRefName \
-            > prs.json
+            > prs.json; then
+            echo "ERROR: Failed to get open PRs."
+            exit 1
+          fi
 
           PR_COUNT=$(jq 'length' prs.json)
+
+          echo "Open PR count: $PR_COUNT"
 
           if [ "$PR_COUNT" -eq 0 ]; then
             echo "No open PRs found."
@@ -56,11 +61,13 @@ jobs:
             PR_TITLE=$(echo "$PR" | jq -r '.title')
 
             echo ""
+            echo "------------------------------------"
             echo "PR Number : #$PR_NUMBER"
             echo "Repository: $REPO"
             echo "Author    : $PR_AUTHOR"
             echo "Branch    : $HEAD_BRANCH"
             echo "Base      : $BASE_BRANCH"
+            echo "Title     : $PR_TITLE"
 
             CREATED_SECONDS=$(date -d "$CREATED_AT" +%s)
             AGE_SECONDS=$((NOW - CREATED_SECONDS))
@@ -68,77 +75,114 @@ jobs:
 
             echo "Open For  : $AGE_MINUTES minute(s)"
 
-            # 5 minutes = 300 seconds
-            if [ "$AGE_SECONDS" -gt 300 ]; then
+            if [ "$AGE_SECONDS" -le 300 ]; then
+              echo "Result    : LEFT OPEN"
+              continue
+            fi
 
-              echo "Action    : Closing PR #$PR_NUMBER"
+            echo ""
+            echo "Action    : Closing PR #$PR_NUMBER"
 
-              gh pr comment "$PR_NUMBER" \
-                --repo "$REPO" \
-                --body "Closed automatically because the PR has been open for more than 5 minutes."
+            if ! gh pr comment "$PR_NUMBER" \
+              --repo "$REPO" \
+              --body "Closed automatically because the PR has been open for more than 5 minutes."; then
 
-              gh pr close "$PR_NUMBER" \
-                --repo "$REPO"
+              echo "WARNING: Failed to add comment to PR #$PR_NUMBER"
+            fi
 
-              echo "Result    : CLOSED"
+            if ! gh pr close "$PR_NUMBER" \
+              --repo "$REPO"; then
 
+              echo "ERROR: Failed to close PR #$PR_NUMBER"
+              echo "Skipping clone for this PR."
+              continue
+            fi
+
+            echo "Result    : CLOSED"
+
+            echo ""
+            echo "Waiting 2 minutes before creating replacement PR..."
+            sleep 120
+
+            echo "Checking source branch..."
+
+            if ! gh api "repos/$REPO/branches/$HEAD_BRANCH" > /dev/null 2>&1; then
+              echo "Source branch '$HEAD_BRANCH' does not exist."
+              echo "New PR was NOT created."
+              continue
+            fi
+
+            echo "Source branch exists."
+            echo "Creating replacement PR..."
+
+            NEW_PR_BODY="Automatically recreated from PR #$PR_NUMBER. Original PR author: @$PR_AUTHOR. The previous PR was automatically closed because it was open for more than 5 minutes."
+
+            NEW_PR_URL=$(gh pr create \
+              --repo "$REPO" \
+              --base "$BASE_BRANCH" \
+              --head "$HEAD_BRANCH" \
+              --title "$PR_TITLE" \
+              --body "$NEW_PR_BODY" 2>&1)
+
+            CREATE_STATUS=$?
+
+            if [ "$CREATE_STATUS" -ne 0 ]; then
               echo ""
-              echo "Waiting 2 minutes before creating a new PR..."
-              sleep 120
+              echo "ERROR: Failed to create replacement PR."
+              echo "GitHub response:"
+              echo "$NEW_PR_URL"
+              echo ""
+              echo "Original PR #$PR_NUMBER was closed."
+              echo "Replacement PR was NOT created."
+              continue
+            fi
 
-              # Check whether source branch still exists
-              if gh api "repos/$REPO/branches/$HEAD_BRANCH" > /dev/null 2>&1; then
+            echo "New PR created: $NEW_PR_URL"
 
-                echo "Source branch still exists."
-                echo "Creating new PR..."
+            NEW_PR_NUMBER=$(echo "$NEW_PR_URL" | grep -oE '[0-9]+$' | tail -1)
 
-                NEW_PR_URL=$(gh pr create \
-                  --repo "$REPO" \
-                  --base "$BASE_BRANCH" \
-                  --head "$HEAD_BRANCH" \
-                  --title "$PR_TITLE" \
-                  --body "Automatically recreated from PR #$PR_NUMBER. Original PR author: @$PR_AUTHOR. The previous PR was automatically closed because it was open for more than 5 minutes.")
+            if [ -z "$NEW_PR_NUMBER" ]; then
+              echo "WARNING: Could not determine new PR number."
+              continue
+            fi
 
-                echo "New PR created: $NEW_PR_URL"
+            echo "New PR Number : #$NEW_PR_NUMBER"
+            echo "Original Author: @$PR_AUTHOR"
 
-                NEW_PR_NUMBER=$(echo "$NEW_PR_URL" | grep -o '[0-9]*$')
+            echo "Adding label 'auto-cloned'..."
 
-                echo "New PR Number : #$NEW_PR_NUMBER"
-                echo "Original Author: $PR_AUTHOR"
+            if gh pr edit "$NEW_PR_NUMBER" \
+              --repo "$REPO" \
+              --add-label "auto-cloned"; then
 
-                echo "Adding label auto-cloned..."
-
-                gh pr edit "$NEW_PR_NUMBER" \
-                  --repo "$REPO" \
-                  --add-label "auto-cloned"
-
-                echo "Label auto-cloned added successfully."
-
-                gh pr comment "$NEW_PR_NUMBER" \
-                  --repo "$REPO" \
-                  --body "This PR was automatically cloned from PR #$PR_NUMBER. Original PR author: @$PR_AUTHOR."
-
-                echo ""
-                echo "===== CLONE REPORT ====="
-                echo "Original PR : #$PR_NUMBER"
-                echo "New PR      : #$NEW_PR_NUMBER"
-                echo "Author      : @$PR_AUTHOR"
-                echo "Label       : auto-cloned"
-                echo "Status      : CREATED"
-                echo "========================"
-
-              else
-
-                echo "Source branch '$HEAD_BRANCH' no longer exists."
-                echo "New PR was NOT created."
-
-              fi
+              echo "Label added successfully."
 
             else
 
-              echo "Result    : LEFT OPEN"
-
+              echo "WARNING: Failed to add label 'auto-cloned'."
             fi
+
+            echo "Adding clone information comment..."
+
+            if gh pr comment "$NEW_PR_NUMBER" \
+              --repo "$REPO" \
+              --body "This PR was automatically cloned from PR #$PR_NUMBER. Original PR author: @$PR_AUTHOR."; then
+
+              echo "Clone information added."
+
+            else
+
+              echo "WARNING: Failed to add clone information."
+            fi
+
+            echo ""
+            echo "===== CLONE REPORT ====="
+            echo "Original PR : #$PR_NUMBER"
+            echo "New PR      : #$NEW_PR_NUMBER"
+            echo "Author      : @$PR_AUTHOR"
+            echo "Label       : auto-cloned"
+            echo "Status      : CREATED"
+            echo "========================"
 
           done
 
