@@ -97,7 +97,7 @@ jobs:
               echo "Waiting 2 minutes before creating a new PR..."
               sleep 120
 
-              # Check whether the source branch still exists
+              # Check whether source branch still exists
               if gh api \
                 "repos/$REPO/branches/$HEAD_BRANCH" \
                 > /dev/null 2>&1; then
@@ -105,7 +105,8 @@ jobs:
                 echo "Source branch still exists."
                 echo "Creating new PR..."
 
-                NEW_PR_BODY="Automatically recreated from PR #$PR_NUMBER.
+                NEW_PR_BODY=$(cat <<EOF
+Automatically recreated from PR #$PR_NUMBER.
 
 Original PR author: @$PR_AUTHOR
 Original PR: #$PR_NUMBER
@@ -113,7 +114,9 @@ Original repository: $REPO
 
 The previous PR was automatically closed because it was open for more than 5 minutes.
 
-This PR was created automatically so the work can continue from the same source branch."
+This PR was created automatically so the work can continue from the same source branch.
+EOF
+)
 
                 NEW_PR_URL=$(gh pr create \
                   --repo "$REPO" \
@@ -138,15 +141,9 @@ This PR was created automatically so the work can continue from the same source 
 
                 echo "Label 'auto-cloned' added successfully."
 
-                # Add a comment to clearly identify the original author
                 gh pr comment "$NEW_PR_NUMBER" \
                   --repo "$REPO" \
-                  --body "Auto-cloned PR for @$PR_AUTHOR.
-
-Original PR: #$PR_NUMBER
-Original author: @$PR_AUTHOR
-
-This PR was automatically created after the original PR exceeded the 5-minute time limit."
+                  --body "Auto-cloned PR for @$PR_AUTHOR. Original PR: #$PR_NUMBER. Original author: @$PR_AUTHOR."
 
                 echo ""
                 echo "===== CLONE REPORT ====="
