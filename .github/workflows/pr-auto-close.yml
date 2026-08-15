@@ -18,13 +18,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          EXCLUDED_USERS: "alpnanegi01"
 
         run: |
           echo "===================================="
           echo "PR AUTO CLOSE"
           echo "Repository: $REPO"
-          echo "Excluded Users: $EXCLUDED_USERS"
           echo "===================================="
 
           echo "Getting open PRs..."
@@ -39,9 +37,7 @@ jobs:
           PR_COUNT=$(jq 'length' prs.json)
 
           if [ "$PR_COUNT" -eq 0 ]; then
-            echo ""
             echo "No open PRs found."
-            echo "Nothing to process."
             exit 0
           fi
 
@@ -65,13 +61,6 @@ jobs:
             echo "Author    : $PR_AUTHOR"
             echo "Branch    : $HEAD_BRANCH"
             echo "Base      : $BASE_BRANCH"
-
-            # Skip excluded users
-            if echo ",$EXCLUDED_USERS," | grep -q ",$PR_AUTHOR,"; then
-              echo "Action    : SKIPPED"
-              echo "Reason    : User is excluded from auto-close"
-              continue
-            fi
 
             CREATED_SECONDS=$(date -d "$CREATED_AT" +%s)
             AGE_SECONDS=$((NOW - CREATED_SECONDS))
@@ -98,52 +87,36 @@ jobs:
               sleep 120
 
               # Check whether source branch still exists
-              if gh api \
-                "repos/$REPO/branches/$HEAD_BRANCH" \
-                > /dev/null 2>&1; then
+              if gh api "repos/$REPO/branches/$HEAD_BRANCH" > /dev/null 2>&1; then
 
                 echo "Source branch still exists."
                 echo "Creating new PR..."
-
-                NEW_PR_BODY=$(cat <<EOF
-Automatically recreated from PR #$PR_NUMBER.
-
-Original PR author: @$PR_AUTHOR
-Original PR: #$PR_NUMBER
-Original repository: $REPO
-
-The previous PR was automatically closed because it was open for more than 5 minutes.
-
-This PR was created automatically so the work can continue from the same source branch.
-EOF
-)
 
                 NEW_PR_URL=$(gh pr create \
                   --repo "$REPO" \
                   --base "$BASE_BRANCH" \
                   --head "$HEAD_BRANCH" \
                   --title "$PR_TITLE" \
-                  --body "$NEW_PR_BODY")
+                  --body "Automatically recreated from PR #$PR_NUMBER. Original PR author: @$PR_AUTHOR. The previous PR was automatically closed because it was open for more than 5 minutes.")
 
                 echo "New PR created: $NEW_PR_URL"
 
-                # Get new PR number
                 NEW_PR_NUMBER=$(echo "$NEW_PR_URL" | grep -o '[0-9]*$')
 
                 echo "New PR Number : #$NEW_PR_NUMBER"
                 echo "Original Author: $PR_AUTHOR"
 
-                echo "Adding label 'auto-cloned' to PR #$NEW_PR_NUMBER..."
+                echo "Adding label auto-cloned..."
 
                 gh pr edit "$NEW_PR_NUMBER" \
                   --repo "$REPO" \
                   --add-label "auto-cloned"
 
-                echo "Label 'auto-cloned' added successfully."
+                echo "Label auto-cloned added successfully."
 
                 gh pr comment "$NEW_PR_NUMBER" \
                   --repo "$REPO" \
-                  --body "Auto-cloned PR for @$PR_AUTHOR. Original PR: #$PR_NUMBER. Original author: @$PR_AUTHOR."
+                  --body "This PR was automatically cloned from PR #$PR_NUMBER. Original PR author: @$PR_AUTHOR."
 
                 echo ""
                 echo "===== CLONE REPORT ====="
