@@ -141,8 +141,8 @@ jobs:
               --repo "$REPO" \
               --base "$BASE_BRANCH" \
               --head "$HEAD_BRANCH" \
-              --title "$PR_TITLE" \
-              --body "Automatically recreated from PR #$PR_NUMBER. Original PR author: @$PR_AUTHOR. The previous PR was automatically closed because it was open for more than 5 minutes." \
+              --title "Clone PR from #$PR_NUMBER: $PR_TITLE" \
+              --body "🤖 Auto-cloned PR. This PR was automatically created from PR #$PR_NUMBER after the original PR was closed because it exceeded the 5-minute time limit." \
               2>&1)
 
             CREATE_STATUS=$?
@@ -159,7 +159,6 @@ jobs:
               echo "===================================="
               echo "ERROR: Replacement PR creation failed"
               echo "Original PR : #$PR_NUMBER"
-              echo "Author      : @$PR_AUTHOR"
               echo "Exit code   : $CREATE_STATUS"
               echo "===================================="
 
@@ -183,7 +182,6 @@ jobs:
 
             echo ""
             echo "New PR Number : #$NEW_PR_NUMBER"
-            echo "Original Author: @$PR_AUTHOR"
 
             echo ""
             echo "Adding label 'auto-cloned'..."
@@ -204,7 +202,7 @@ jobs:
 
             if gh pr comment "$NEW_PR_NUMBER" \
               --repo "$REPO" \
-              --body "This PR was automatically cloned from PR #$PR_NUMBER. Original PR author: @$PR_AUTHOR."; then
+              --body "🤖 Auto-cloned PR from PR #$PR_NUMBER. The original PR was automatically closed after exceeding the 5-minute time limit."; then
 
               echo "Clone information comment added successfully."
 
@@ -219,7 +217,6 @@ jobs:
             echo "===================================="
             echo "Original PR : #$PR_NUMBER"
             echo "New PR      : #$NEW_PR_NUMBER"
-            echo "Original User: @$PR_AUTHOR"
             echo "Branch      : $HEAD_BRANCH"
             echo "Base        : $BASE_BRANCH"
             echo "Label       : auto-cloned"
