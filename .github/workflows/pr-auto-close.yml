@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 jobs:
@@ -18,55 +18,214 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          EXCLUDED_USERS: "alpnanegi01"
 
         run: |
-          echo "Checking open PRs in $REPO..."
+          echo "===================================="
+          echo "PR AUTO CLOSE"
+          echo "Repository: $REPO"
+          echo "Excluded Users: $EXCLUDED_USERS"
+          echo "===================================="
 
-          NOW=$(date -u +%s)
+          echo "Getting open PRs..."
 
           gh pr list \
             --repo "$REPO" \
             --state open \
             --limit 100 \
-            --json number,title,author,createdAt \
+            --json number,title,author,createdAt,headRefName,baseRefName \
             > prs.json
+
+          PR_COUNT=$(jq 'length' prs.json)
+
+          echo "Open PR count: $PR_COUNT"
+
+          if [ "$PR_COUNT" -eq 0 ]; then
+            echo "No open PRs found."
+            exit 0
+          fi
+
+          NOW=$(date -u +%s)
 
           echo ""
           echo "===== PR EXECUTION REPORT ====="
 
-          jq -c '.[]' prs.json | while read -r PR; do
+          for PR_NUMBER in $(jq -r '.[].number' prs.json); do
 
-            PR_NUMBER=$(echo "$PR" | jq -r '.number')
+            PR=$(jq -c ".[] | select(.number == $PR_NUMBER)" prs.json)
+
             PR_AUTHOR=$(echo "$PR" | jq -r '.author.login')
             CREATED_AT=$(echo "$PR" | jq -r '.createdAt')
-
-            CREATED_SECONDS=$(date -d "$CREATED_AT" +%s)
-            AGE_SECONDS=$((NOW - CREATED_SECONDS))
-            AGE_HOURS=$((AGE_SECONDS / 3600))
+            HEAD_BRANCH=$(echo "$PR" | jq -r '.headRefName')
+            BASE_BRANCH=$(echo "$PR" | jq -r '.baseRefName')
+            PR_TITLE=$(echo "$PR" | jq -r '.title')
 
             echo ""
+            echo "===================================="
             echo "PR Number : #$PR_NUMBER"
             echo "Repository: $REPO"
             echo "Author    : $PR_AUTHOR"
-            echo "Open For  : $AGE_HOURS hour(s)"
+            echo "Branch    : $HEAD_BRANCH"
+            echo "Base      : $BASE_BRANCH"
+            echo "Title     : $PR_TITLE"
+            echo "===================================="
 
-            if [ "$AGE_SECONDS" -gt 3600 ]; then
+            # Skip excluded users
+            if echo ",$EXCLUDED_USERS," | grep -q ",$PR_AUTHOR,"; then
+              echo "Action    : SKIPPED"
+              echo "Reason    : User is excluded from auto-close"
+              continue
+            fi
 
-              echo "Action: Closing PR #$PR_NUMBER"
+            CREATED_SECONDS=$(date -d "$CREATED_AT" +%s)
+            AGE_SECONDS=$((NOW - CREATED_SECONDS))
+            AGE_MINUTES=$((AGE_SECONDS / 60))
 
-              gh pr comment "$PR_NUMBER" \
-                --repo "$REPO" \
-                --body "Closed automatically because the PR has been open for >1h with no activity."
+            echo "Open For  : $AGE_MINUTES minute(s)"
 
-              gh pr close "$PR_NUMBER" \
-                --repo "$REPO"
+            # 5 minutes = 300 seconds
+            if [ "$AGE_SECONDS" -le 300 ]; then
+              echo "Result    : LEFT OPEN"
+              continue
+            fi
 
-              echo "Result: CLOSED"
+            echo ""
+            echo "Action    : Closing PR #$PR_NUMBER"
+
+            if gh pr comment "$PR_NUMBER" \
+              --repo "$REPO" \
+              --body "Closed automatically because the PR has been open for more than 5 minutes."; then
+
+              echo "Comment added successfully."
 
             else
 
-              echo "Result: LEFT OPEN"
-
+              echo "WARNING: Could not add comment."
             fi
 
+            if gh pr close "$PR_NUMBER" \
+              --repo "$REPO"; then
+
+              echo "Result    : CLOSED"
+
+            else
+
+              echo "ERROR: Failed to close PR #$PR_NUMBER"
+              continue
+            fi
+
+            echo ""
+            echo "Waiting 2 minutes before creating replacement PR..."
+            sleep 120
+
+            echo ""
+            echo "Checking source branch..."
+
+            if gh api "repos/$REPO/branches/$HEAD_BRANCH" > /dev/null 2>&1; then
+
+              echo "Source branch exists."
+
+            else
+
+              echo "Source branch '$HEAD_BRANCH' does not exist."
+              echo "New PR was NOT created."
+              continue
+            fi
+
+            echo ""
+            echo "Creating replacement PR..."
+
+            set +e
+
+            NEW_PR_OUTPUT=$(gh pr create \
+              --repo "$REPO" \
+              --base "$BASE_BRANCH" \
+              --head "$HEAD_BRANCH" \
+              --title "Clone PR from #$PR_NUMBER: $PR_TITLE" \
+              --body "🤖 Auto-cloned PR. This PR was automatically created from PR #$PR_NUMBER after the original PR was closed because it exceeded the 5-minute time limit." \
+              2>&1)
+
+            CREATE_STATUS=$?
+
+            set -e
+
+            echo ""
+            echo "GitHub response:"
+            echo "$NEW_PR_OUTPUT"
+            echo ""
+
+            if [ "$CREATE_STATUS" -ne 0 ]; then
+
+              echo "===================================="
+              echo "ERROR: Replacement PR creation failed"
+              echo "Original PR : #$PR_NUMBER"
+              echo "Exit code   : $CREATE_STATUS"
+              echo "===================================="
+
+              echo ""
+              echo "Original PR was closed successfully."
+              echo "Replacement PR was NOT created."
+
+              continue
+            fi
+
+            NEW_PR_URL="$NEW_PR_OUTPUT"
+
+            echo "New PR created: $NEW_PR_URL"
+
+            NEW_PR_NUMBER=$(echo "$NEW_PR_URL" | grep -oE '[0-9]+$' | tail -1)
+
+            if [ -z "$NEW_PR_NUMBER" ]; then
+              echo "ERROR: Could not determine new PR number."
+              continue
+            fi
+
+            echo ""
+            echo "New PR Number : #$NEW_PR_NUMBER"
+
+            echo ""
+            echo "Adding label 'auto-cloned'..."
+
+            if gh pr edit "$NEW_PR_NUMBER" \
+              --repo "$REPO" \
+              --add-label "auto-cloned"; then
+
+              echo "Label 'auto-cloned' added successfully."
+
+            else
+
+              echo "WARNING: Could not add 'auto-cloned' label."
+            fi
+
+            echo ""
+            echo "Adding clone information comment..."
+
+            if gh pr comment "$NEW_PR_NUMBER" \
+              --repo "$REPO" \
+              --body "🤖 Auto-cloned PR from PR #$PR_NUMBER. The original PR was automatically closed after exceeding the 5-minute time limit."; then
+
+              echo "Clone information comment added successfully."
+
+            else
+
+              echo "WARNING: Could not add clone information comment."
+            fi
+
+            echo ""
+            echo "===================================="
+            echo "CLONE REPORT"
+            echo "===================================="
+            echo "Original PR : #$PR_NUMBER"
+            echo "New PR      : #$NEW_PR_NUMBER"
+            echo "Branch      : $HEAD_BRANCH"
+            echo "Base        : $BASE_BRANCH"
+            echo "Label       : auto-cloned"
+            echo "Status      : CREATED"
+            echo "===================================="
+
           done
+
+          echo ""
+          echo "===================================="
+          echo "PROCESS COMPLETED"
+          echo "===================================="
